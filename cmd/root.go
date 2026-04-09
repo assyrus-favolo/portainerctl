@@ -3,8 +3,10 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/portainer/portainerctl/internal/output"
 )
 
 var rootCmd = &cobra.Command{
@@ -16,20 +18,33 @@ It covers the full Portainer BE API surface: environments, stacks, containers,
 Kubernetes workloads, users, teams, RBAC, edge compute, registries, GitOps,
 webhooks, backups, licensing, and observability.
 
-Kubernetes passthrough:
-  portainerctl kubectl --env <id> -- get pods -n default
+Output format (applies to all commands):
+  -o table   Human-readable table (default)
+  -o json    JSON
+  -o yaml    YAML
 
-Docker passthrough:
-  portainerctl docker --env <id> -- ps -a
+Examples:
+  portainerctl env list
+  portainerctl env list -o json
+  portainerctl env list -o yaml
+  portainerctl stack get 5 -o json | jq '.GitConfig.URL'
+  portainerctl kubectl --env 4 -- get pods -n default
 
 Configuration:
   portainerctl config add-context --name prod --url https://portainer.example.com --token <pat>
   portainerctl config use-context prod
 
 Environment variable overrides:
-  PORTAINERCTL_URL     Portainer server URL
-  PORTAINERCTL_TOKEN   API token (PAT)
+  PORTAINERCTL_URL      Portainer server URL
+  PORTAINERCTL_TOKEN    API token (PAT)
   PORTAINERCTL_INSECURE=true  Skip TLS verification`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		f := strings.ToLower(output.Format)
+		if f != "table" && f != "json" && f != "yaml" && f != "yml" {
+			return fmt.Errorf("invalid output format %q — must be table, json, or yaml", output.Format)
+		}
+		return nil
+	},
 }
 
 func Execute() {
@@ -40,6 +55,12 @@ func Execute() {
 }
 
 func init() {
+	// Persistent flag: available on every subcommand
+	rootCmd.PersistentFlags().StringVarP(
+		&output.Format, "output", "o", "table",
+		`Output format: table (default), json, yaml`,
+	)
+
 	rootCmd.AddCommand(
 		configCmd(),
 		envCmd(),
