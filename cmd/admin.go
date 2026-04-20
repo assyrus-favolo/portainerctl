@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/portainer/portainerctl/internal/client"
@@ -88,13 +91,8 @@ func backupCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := client.MustClient(); if err != nil { return err }
 			body := map[string]interface{}{"Password": backupPass}
-			data, err := c.RawGet("/backup")
-			if err != nil {
-				// POST for backup
-				_ = c.Post("/backup", body, nil)
-				output.Success("Backup initiated.")
-				return nil
-			}
+			data, err := c.RawPost("/backup", body)
+			if err != nil { return err }
 			outFile := backupOutput
 			if outFile == "" { outFile = "portainer-backup.tar.gz" }
 			if err := os.WriteFile(outFile, data, 0600); err != nil { return err }
@@ -297,27 +295,41 @@ func userActivityCmd() *cobra.Command {
 		},
 	}
 
+	var authCsvRange, authCsvOutput string
 	authLogsCsvCmd := &cobra.Command{
-		Use: "auth-logs-csv", Short: "Download authentication logs as CSV",
+		Use:   "auth-logs-csv",
+		Short: "Download authentication logs as CSV",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := client.MustClient(); if err != nil { return err }
-			data, err := c.RawGet("/useractivity/authlogs.csv")
+			after, err := parseDayRange(authCsvRange)
 			if err != nil { return err }
-			fmt.Print(string(data))
-			return nil
+			c, err := client.MustClient(); if err != nil { return err }
+			path := "/useractivity/authlogs.csv"
+			if after > 0 { path += fmt.Sprintf("?after=%d", after) }
+			data, err := c.RawGet(path)
+			if err != nil { return err }
+			return writeCsvOutput(data, authCsvOutput)
 		},
 	}
+	authLogsCsvCmd.Flags().StringVar(&authCsvRange, "range", "", "Time range: 1d–7d (e.g. 2d = last 2 days)")
+	authLogsCsvCmd.Flags().StringVar(&authCsvOutput, "output-file", "", "Save CSV to file instead of printing")
 
+	var logsCsvRange, logsCsvOutput string
 	logsCsvCmd := &cobra.Command{
-		Use: "logs-csv", Short: "Download user activity logs as CSV",
+		Use:   "logs-csv",
+		Short: "Download user activity logs as CSV",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := client.MustClient(); if err != nil { return err }
-			data, err := c.RawGet("/useractivity/logs.csv")
+			after, err := parseDayRange(logsCsvRange)
 			if err != nil { return err }
-			fmt.Print(string(data))
-			return nil
+			c, err := client.MustClient(); if err != nil { return err }
+			path := "/useractivity/logs.csv"
+			if after > 0 { path += fmt.Sprintf("?after=%d", after) }
+			data, err := c.RawGet(path)
+			if err != nil { return err }
+			return writeCsvOutput(data, logsCsvOutput)
 		},
 	}
+	logsCsvCmd.Flags().StringVar(&logsCsvRange, "range", "", "Time range: 1d–7d (e.g. 2d = last 2 days)")
+	logsCsvCmd.Flags().StringVar(&logsCsvOutput, "output-file", "", "Save CSV to file instead of printing")
 
 	cmd.AddCommand(authLogsCmd, logsCmd, authLogsCsvCmd, logsCsvCmd)
 	return cmd
@@ -716,4 +728,30 @@ func supportCmd() *cobra.Command {
 
 	cmd.AddCommand(downloadCmd, debugLogCmd)
 	return cmd
+}
+
+func parseDayRange(r string) (int64, error) {
+	if r == "" {
+		return 0, nil
+	}
+	if !strings.HasSuffix(r, "d") {
+		return 0, fmt.Errorf("invalid range %q: use format like 1d, 2d, up to 7d", r)
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(r, "d"))
+	if err != nil || n < 1 || n > 7 {
+		return 0, fmt.Errorf("invalid range %q: must be between 1d and 7d", r)
+	}
+	return time.Now().Add(-time.Duration(n) * 24 * time.Hour).Unix(), nil
+}
+
+func writeCsvOutput(data []byte, outputFile string) error {
+	if outputFile != "" {
+		if err := os.WriteFile(outputFile, data, 0600); err != nil {
+			return err
+		}
+		output.Success("Saved to " + outputFile)
+		return nil
+	}
+	fmt.Print(string(data))
+	return nil
 }

@@ -344,6 +344,7 @@ func stackCmd() *cobra.Command {
 	deployK8sGitCmd.Flags().StringVar(&deployBranch, "branch", "main", "Git branch")
 	deployK8sGitCmd.Flags().StringVar(&deployPath, "path", "manifest.yaml", "Manifest file path in repo")
 
+	var redeployEnvID int
 	redeployCmd := &cobra.Command{
 		Use:   "redeploy <id>",
 		Short: "Redeploy a GitOps-backed stack (pull latest from Git)",
@@ -353,49 +354,66 @@ func stackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			path := "/stacks/" + args[0] + "/git/redeploy"
+			if redeployEnvID > 0 {
+				path += fmt.Sprintf("?endpointId=%d", redeployEnvID)
+			}
 			var result interface{}
-			if err := c.Put("/stacks/"+args[0]+"/git/redeploy", map[string]interface{}{}, &result); err != nil {
+			if err := c.Put(path, map[string]interface{}{}, &result); err != nil {
 				return err
 			}
 			output.Success("Stack " + args[0] + " redeployed from Git.")
 			return nil
 		},
 	}
+	redeployCmd.Flags().IntVar(&redeployEnvID, "env", 0, "Environment ID (required for stacks created before v1.18.0)")
 
+	var startEnvID int
 	startCmd := &cobra.Command{
 		Use:   "start <id>",
 		Short: "Start a stopped stack",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if startEnvID == 0 {
+				return fmt.Errorf("--env is required")
+			}
 			c, err := client.MustClient()
 			if err != nil {
 				return err
 			}
 			var result interface{}
-			if err := c.Post("/stacks/"+args[0]+"/start", nil, &result); err != nil {
+			path := fmt.Sprintf("/stacks/%s/start?endpointId=%d", args[0], startEnvID)
+			if err := c.Post(path, nil, &result); err != nil {
 				return err
 			}
 			output.Success("Stack " + args[0] + " started.")
 			return nil
 		},
 	}
+	startCmd.Flags().IntVar(&startEnvID, "env", 0, "Environment ID (required)")
 
+	var stopEnvID int
 	stopCmd := &cobra.Command{
 		Use:   "stop <id>",
 		Short: "Stop a running stack",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if stopEnvID == 0 {
+				return fmt.Errorf("--env is required")
+			}
 			c, err := client.MustClient()
 			if err != nil {
 				return err
 			}
-			if err := c.Post("/stacks/"+args[0]+"/stop", nil, nil); err != nil {
+			path := fmt.Sprintf("/stacks/%s/stop?endpointId=%d", args[0], stopEnvID)
+			if err := c.Post(path, nil, nil); err != nil {
 				return err
 			}
 			output.Success("Stack " + args[0] + " stopped.")
 			return nil
 		},
 	}
+	stopCmd.Flags().IntVar(&stopEnvID, "env", 0, "Environment ID (required)")
 
 	var deleteEnvID int
 	deleteCmd := &cobra.Command{

@@ -136,6 +136,33 @@ func (c *Client) DeleteWithBody(path string, body interface{}) error {
 	return c.do(req, nil)
 }
 
+// RawPost sends a POST and returns the raw response body — used for binary responses like backup.
+func (c *Client) RawPost(path string, body interface{}) ([]byte, error) {
+	req, err := c.newRequest("POST", path, body)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		var apiErr APIError
+		apiErr.Status = resp.StatusCode
+		_ = json.Unmarshal(data, &apiErr)
+		if apiErr.Message == "" {
+			apiErr.Message = string(data)
+		}
+		return nil, &apiErr
+	}
+	return data, nil
+}
+
 // RawGet returns the raw response body — used for passthrough commands (kubectl proxy, docker proxy).
 func (c *Client) RawGet(path string) ([]byte, error) {
 	req, err := c.newRequest("GET", path, nil)
