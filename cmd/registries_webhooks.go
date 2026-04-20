@@ -50,6 +50,8 @@ func registryTypeLabel(t int) string {
 		return "dockerhub"
 	case 7:
 		return "ecr"
+	case 8:
+		return "github"
 	default:
 		return strconv.Itoa(t)
 	}
@@ -183,6 +185,7 @@ func registryCmd() *cobra.Command {
 	}
 
 	var pingURL, pingUser, pingPass string
+	var pingType int
 	pingCmd := &cobra.Command{
 		Use:   "ping",
 		Short: "Test connectivity to a registry",
@@ -194,7 +197,7 @@ func registryCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			body := map[string]interface{}{"URL": pingURL, "Username": pingUser, "Password": pingPass}
+			body := map[string]interface{}{"URL": pingURL, "Username": pingUser, "Password": pingPass, "Type": pingType}
 			if err := c.Post("/registries/ping", body, nil); err != nil {
 				return err
 			}
@@ -205,6 +208,7 @@ func registryCmd() *cobra.Command {
 	pingCmd.Flags().StringVar(&pingURL, "url", "", "Registry URL")
 	pingCmd.Flags().StringVar(&pingUser, "user", "", "Username")
 	pingCmd.Flags().StringVar(&pingPass, "pass", "", "Password")
+	pingCmd.Flags().IntVar(&pingType, "type", 3, "Registry type: 1=quay, 2=azure, 3=custom, 4=gitlab, 5=proget, 6=dockerhub, 7=ecr, 8=github")
 
 	cmd.AddCommand(listCmd, getCmd, createCmd, deleteCmd, reposCmd, pingCmd)
 	return cmd
