@@ -163,7 +163,7 @@ func (c *Client) RawPost(path string, body interface{}) ([]byte, error) {
 	return data, nil
 }
 
-// RawGet returns the raw response body — used for passthrough commands (kubectl proxy, docker proxy).
+// RawGet returns the raw response body — used for binary/passthrough responses.
 func (c *Client) RawGet(path string) ([]byte, error) {
 	req, err := c.newRequest("GET", path, nil)
 	if err != nil {
@@ -174,7 +174,20 @@ func (c *Client) RawGet(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		var apiErr APIError
+		apiErr.Status = resp.StatusCode
+		_ = json.Unmarshal(data, &apiErr)
+		if apiErr.Message == "" {
+			apiErr.Message = string(data)
+		}
+		return nil, &apiErr
+	}
+	return data, nil
 }
 
 // ProxyRequest forwards an arbitrary method+path+body through the Portainer API proxy.
