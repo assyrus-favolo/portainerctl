@@ -12,10 +12,18 @@ import (
 
 // portaineree.Stack — only scalar fields used in list table.
 // GitConfig is gittypes.RepoConfig which has URL string at top level.
+type gitAuthentication struct {
+	GitCredentialID  int    `json:"GitCredentialID"`
+	Username         string `json:"Username"`
+	Password         string `json:"Password"`
+	AuthorizationType int   `json:"AuthorizationType"`
+}
+
 type gitRepoConfig struct {
-	URL           string `json:"URL"`
-	ReferenceName string `json:"ReferenceName"`
-	ConfigFilePath string `json:"ConfigFilePath"`
+	URL            string           `json:"URL"`
+	ReferenceName  string           `json:"ReferenceName"`
+	ConfigFilePath string           `json:"ConfigFilePath"`
+	Authentication *gitAuthentication `json:"Authentication"`
 }
 
 type stack struct {
@@ -115,8 +123,9 @@ func stackCmd() *cobra.Command {
 		},
 	}
 
+	var getByNameEnvID int
 	getByNameCmd := &cobra.Command{
-		Use:   "get-by-name <n>",
+		Use:   "get-by-name <name>",
 		Short: "Get a stack by name",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -124,14 +133,24 @@ func stackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var result interface{}
-			if err := c.Get("/stacks/name/"+args[0], &result); err != nil {
+			path := "/stacks"
+			if getByNameEnvID > 0 {
+				path += fmt.Sprintf("?filters={\"EndpointID\":%d}", getByNameEnvID)
+			}
+			var stacks []stack
+			if err := c.Get(path, &stacks); err != nil {
 				return err
 			}
-			output.JSON(result)
-			return nil
+			for _, s := range stacks {
+				if s.Name == args[0] {
+					output.JSON(s)
+					return nil
+				}
+			}
+			return fmt.Errorf("no stack found with name %q", args[0])
 		},
 	}
+	getByNameCmd.Flags().IntVar(&getByNameEnvID, "env", 0, "Filter by environment ID")
 
 	fileCmd := &cobra.Command{
 		Use:   "file <id>",
@@ -354,12 +373,31 @@ func stackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Fetch stack to get existing git auth config
+			var s stack
+			if err := c.Get("/stacks/"+args[0], &s); err != nil {
+				return err
+			}
+			body := map[string]interface{}{
+				"RepositoryAuthentication": false,
+			}
+			if s.GitConfig != nil {
+				body["RepositoryReferenceName"] = s.GitConfig.ReferenceName
+				if auth := s.GitConfig.Authentication; auth != nil && auth.GitCredentialID != 0 {
+					body["RepositoryAuthentication"] = true
+					body["RepositoryGitCredentialID"] = auth.GitCredentialID
+				} else if auth != nil && auth.Username != "" {
+					body["RepositoryAuthentication"] = true
+					body["RepositoryUsername"] = auth.Username
+					body["RepositoryPassword"] = auth.Password
+				}
+			}
 			path := "/stacks/" + args[0] + "/git/redeploy"
 			if redeployEnvID > 0 {
 				path += fmt.Sprintf("?endpointId=%d", redeployEnvID)
 			}
 			var result interface{}
-			if err := c.Put(path, map[string]interface{}{}, &result); err != nil {
+			if err := c.Put(path, body, &result); err != nil {
 				return err
 			}
 			output.Success("Stack " + args[0] + " redeployed from Git.")
