@@ -50,6 +50,8 @@ func registryTypeLabel(t int) string {
 		return "dockerhub"
 	case 7:
 		return "ecr"
+	case 8:
+		return "github"
 	default:
 		return strconv.Itoa(t)
 	}
