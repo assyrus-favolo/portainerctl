@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/portainer/portainerctl/internal/config"
+	"golang.org/x/net/http/httpproxy"
 )
 
 // Client wraps all HTTP calls to the Portainer BE 2.39.1 API.
 type Client struct {
-	baseURL    string
-	token      string
-	http       *http.Client
+	baseURL string
+	token   string
+	http    *http.Client
 }
 
 type APIError struct {
@@ -35,9 +38,9 @@ func (e *APIError) Error() string {
 
 // New constructs a Client from the active config context.
 func New(ctx *config.Context) *Client {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: ctx.Insecure},
-	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = proxyFromEnvironment()
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: ctx.Insecure}
 	return &Client{
 		baseURL: strings.TrimRight(ctx.URL, "/") + "/api",
 		token:   ctx.Token,
@@ -46,6 +49,40 @@ func New(ctx *config.Context) *Client {
 			Transport: transport,
 		},
 	}
+}
+
+// proxyFromEnvironment extends Go's standard proxy environment behavior with
+// ALL_PROXY. Explicit per-protocol proxies take precedence over ALL_PROXY, and
+// NO_PROXY is applied to both. SOCKS proxy URLs are passed to net/http intact,
+// including socks5h URLs that resolve hostnames through the proxy.
+func proxyFromEnvironment() func(*http.Request) (*url.URL, error) {
+	allProxy := firstEnv("ALL_PROXY", "all_proxy")
+	proxyConfig := &httpproxy.Config{
+		HTTPProxy:  firstEnv("HTTP_PROXY", "http_proxy"),
+		HTTPSProxy: firstEnv("HTTPS_PROXY", "https_proxy"),
+		NoProxy:    firstEnv("NO_PROXY", "no_proxy"),
+		CGI:        os.Getenv("REQUEST_METHOD") != "",
+	}
+	if proxyConfig.HTTPProxy == "" {
+		proxyConfig.HTTPProxy = allProxy
+	}
+	if proxyConfig.HTTPSProxy == "" {
+		proxyConfig.HTTPSProxy = allProxy
+	}
+
+	proxyForURL := proxyConfig.ProxyFunc()
+	return func(req *http.Request) (*url.URL, error) {
+		return proxyForURL(req.URL)
+	}
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (c *Client) newRequest(method, path string, body interface{}) (*http.Request, error) {
