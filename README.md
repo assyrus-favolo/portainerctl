@@ -136,13 +136,16 @@ portainerctl stack file <id>
 portainerctl stack deploy-compose --name myapp --env 2 --file docker-compose.yml
 portainerctl stack deploy-swarm   --name myapp --env 2 --file docker-stack.yml
 portainerctl stack deploy-git     --name myapp --env 2 --repo https://github.com/org/repo --branch main --path docker-compose.yml
+printf '%s\n' "$GIT_TOKEN" | portainerctl stack deploy-git --name private --env 2 --repo https://github.com/org/private --git-username myuser --git-password-stdin
 portainerctl stack deploy-k8s     --name myapp --env 4 --file manifest.yaml
 portainerctl stack deploy-k8s-git --name myapp --env 4 --repo https://github.com/org/repo --branch main --path manifest.yaml
 
 # Lifecycle
 portainerctl stack start <id>
 portainerctl stack stop <id>
-portainerctl stack redeploy <id>      # pull latest from Git
+portainerctl stack redeploy <id>      # preserve current Git settings and pull latest
+portainerctl stack redeploy <id> --repull-image
+printf '%s\n' "$NEW_GIT_TOKEN" | portainerctl stack redeploy <id> --git-password-stdin
 portainerctl stack delete <id> --env 2
 portainerctl stack image-status <id>
 ```

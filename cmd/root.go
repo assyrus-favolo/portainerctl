@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/portainer/portainerctl/internal/output"
+	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
@@ -37,7 +37,10 @@ Configuration:
 Environment variable overrides:
   PORTAINERCTL_URL      Portainer server URL
   PORTAINERCTL_TOKEN    API token (PAT)
-  PORTAINERCTL_INSECURE=true  Skip TLS verification`,
+  PORTAINERCTL_INSECURE=true  Skip TLS verification
+  PORTAINERCTL_GIT_USERNAME   Git repository username
+  PORTAINERCTL_GIT_PASSWORD   Git repository password/token
+  PORTAINERCTL_GIT_AUTH_TYPE  Git authorization type: basic or token`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		f := strings.ToLower(output.Format)
 		if f != "table" && f != "json" && f != "yaml" && f != "yml" {

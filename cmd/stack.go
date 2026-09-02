@@ -2,20 +2,37 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
+	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/portainer/portainerctl/internal/client"
 	"github.com/portainer/portainerctl/internal/output"
+	"github.com/spf13/cobra"
 )
 
 // portaineree.Stack — only scalar fields used in list table.
 // GitConfig is gittypes.RepoConfig which has URL string at top level.
 type gitRepoConfig struct {
-	URL           string `json:"URL"`
-	ReferenceName string `json:"ReferenceName"`
-	ConfigFilePath string `json:"ConfigFilePath"`
+	URL            string             `json:"URL"`
+	ReferenceName  string             `json:"ReferenceName"`
+	ConfigFilePath string             `json:"ConfigFilePath"`
+	Authentication *gitAuthentication `json:"Authentication"`
+}
+
+type gitAuthentication struct {
+	Username          string `json:"Username"`
+	AuthorizationType int    `json:"AuthorizationType"`
+}
+
+type stackEnv struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type stackOption struct {
+	Prune bool `json:"Prune"`
 }
 
 type stack struct {
@@ -26,6 +43,57 @@ type stack struct {
 	Status     int            `json:"Status"`
 	CreatedBy  string         `json:"CreatedBy"`
 	GitConfig  *gitRepoConfig `json:"GitConfig"`
+	Env        []stackEnv     `json:"Env"`
+	Option     *stackOption   `json:"Option"`
+}
+
+type gitAuthOptions struct {
+	username      string
+	authType      string
+	passwordStdin bool
+}
+
+func addGitAuthFlags(cmd *cobra.Command, opts *gitAuthOptions) {
+	cmd.Flags().StringVar(&opts.username, "git-username", "", "Git username (or PORTAINERCTL_GIT_USERNAME)")
+	cmd.Flags().StringVar(&opts.authType, "git-auth-type", "", "Git authorization type: basic or token (or PORTAINERCTL_GIT_AUTH_TYPE)")
+	cmd.Flags().BoolVar(&opts.passwordStdin, "git-password-stdin", false, "Read the Git password/token from standard input")
+}
+
+func (opts gitAuthOptions) credentials(stdin io.Reader) (gitAuthentication, string, bool, error) {
+	username := opts.username
+	if username == "" {
+		username = os.Getenv("PORTAINERCTL_GIT_USERNAME")
+	}
+
+	password, passwordSet := os.LookupEnv("PORTAINERCTL_GIT_PASSWORD")
+	passwordSet = passwordSet && password != ""
+	if opts.passwordStdin {
+		if passwordSet {
+			return gitAuthentication{}, "", false, fmt.Errorf("use either --git-password-stdin or PORTAINERCTL_GIT_PASSWORD, not both")
+		}
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return gitAuthentication{}, "", false, fmt.Errorf("reading Git password from stdin: %w", err)
+		}
+		password = strings.TrimRight(string(data), "\r\n")
+		passwordSet = true
+	}
+
+	authType := opts.authType
+	if authType == "" {
+		authType = os.Getenv("PORTAINERCTL_GIT_AUTH_TYPE")
+	}
+	credential := gitAuthentication{Username: username}
+	switch strings.ToLower(authType) {
+	case "", "basic":
+		credential.AuthorizationType = 0
+	case "token":
+		credential.AuthorizationType = 1
+	default:
+		return gitAuthentication{}, "", false, fmt.Errorf("invalid Git authorization type %q: use basic or token", authType)
+	}
+
+	return credential, password, passwordSet, nil
 }
 
 func stackTypeLabel(t int) string {
@@ -158,6 +226,7 @@ func stackCmd() *cobra.Command {
 
 	var deployName, deployFile, deployRepo, deployBranch, deployPath string
 	var deployEnvID int
+	var deployGitAuth gitAuthOptions
 
 	deployComposeCmd := &cobra.Command{
 		Use:     "deploy-compose",
@@ -252,13 +321,24 @@ func stackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			credential, password, passwordSet, err := deployGitAuth.credentials(cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			authenticated := passwordSet || credential.Username != ""
+			if authenticated && password == "" {
+				return fmt.Errorf("Git authentication requires a password/token via --git-password-stdin or PORTAINERCTL_GIT_PASSWORD")
+			}
 			body := map[string]interface{}{
-				"Name":                     deployName,
-				"RepositoryURL":            deployRepo,
-				"RepositoryReferenceName":  "refs/heads/" + deployBranch,
-				"ComposeFile":              deployPath,
-				"Env":                      []interface{}{},
-				"RepositoryAuthentication": false,
+				"Name":                        deployName,
+				"RepositoryURL":               deployRepo,
+				"RepositoryReferenceName":     "refs/heads/" + deployBranch,
+				"ComposeFile":                 deployPath,
+				"Env":                         []interface{}{},
+				"RepositoryAuthentication":    authenticated,
+				"RepositoryUsername":          credential.Username,
+				"RepositoryPassword":          password,
+				"RepositoryAuthorizationType": credential.AuthorizationType,
 			}
 			var result interface{}
 			path := fmt.Sprintf("/stacks/create/standalone/repository?endpointId=%d", deployEnvID)
@@ -274,6 +354,7 @@ func stackCmd() *cobra.Command {
 	deployGitCmd.Flags().StringVar(&deployRepo, "repo", "", "Git repository URL")
 	deployGitCmd.Flags().StringVar(&deployBranch, "branch", "main", "Git branch")
 	deployGitCmd.Flags().StringVar(&deployPath, "path", "docker-compose.yml", "Compose file path in repo")
+	addGitAuthFlags(deployGitCmd, &deployGitAuth)
 
 	deployK8sCmd := &cobra.Command{
 		Use:     "deploy-k8s",
@@ -321,13 +402,24 @@ func stackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			credential, password, passwordSet, err := deployGitAuth.credentials(cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			authenticated := passwordSet || credential.Username != ""
+			if authenticated && password == "" {
+				return fmt.Errorf("Git authentication requires a password/token via --git-password-stdin or PORTAINERCTL_GIT_PASSWORD")
+			}
 			body := map[string]interface{}{
-				"StackName":                deployName,
-				"RepositoryURL":            deployRepo,
-				"RepositoryReferenceName":  "refs/heads/" + deployBranch,
-				"ManifestFile":             deployPath,
-				"RepositoryAuthentication": false,
-				"Namespace":                "default",
+				"StackName":                   deployName,
+				"RepositoryURL":               deployRepo,
+				"RepositoryReferenceName":     "refs/heads/" + deployBranch,
+				"ManifestFile":                deployPath,
+				"RepositoryAuthentication":    authenticated,
+				"RepositoryUsername":          credential.Username,
+				"RepositoryPassword":          password,
+				"RepositoryAuthorizationType": credential.AuthorizationType,
+				"Namespace":                   "default",
 			}
 			var result interface{}
 			path := fmt.Sprintf("/stacks/create/kubernetes/repository?endpointId=%d", deployEnvID)
@@ -343,8 +435,12 @@ func stackCmd() *cobra.Command {
 	deployK8sGitCmd.Flags().StringVar(&deployRepo, "repo", "", "Git repository URL")
 	deployK8sGitCmd.Flags().StringVar(&deployBranch, "branch", "main", "Git branch")
 	deployK8sGitCmd.Flags().StringVar(&deployPath, "path", "manifest.yaml", "Manifest file path in repo")
+	addGitAuthFlags(deployK8sGitCmd, &deployGitAuth)
 
 	var redeployEnvID int
+	var redeployBranch string
+	var redeployPrune, redeployRepull bool
+	var redeployGitAuth gitAuthOptions
 	redeployCmd := &cobra.Command{
 		Use:   "redeploy <id>",
 		Short: "Redeploy a GitOps-backed stack (pull latest from Git)",
@@ -354,12 +450,70 @@ func stackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			path := "/stacks/" + args[0] + "/git/redeploy"
-			if redeployEnvID > 0 {
-				path += fmt.Sprintf("?endpointId=%d", redeployEnvID)
+			var existing stack
+			if err := c.Get("/stacks/"+args[0], &existing); err != nil {
+				return fmt.Errorf("reading current stack settings: %w", err)
+			}
+			if existing.GitConfig == nil {
+				return fmt.Errorf("stack %s is not backed by Git", args[0])
+			}
+
+			credential, password, passwordSet, err := redeployGitAuth.credentials(cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			authenticated := existing.GitConfig.Authentication != nil
+			if authenticated {
+				if credential.Username == "" {
+					credential.Username = existing.GitConfig.Authentication.Username
+				}
+				if redeployGitAuth.authType == "" && os.Getenv("PORTAINERCTL_GIT_AUTH_TYPE") == "" {
+					credential.AuthorizationType = existing.GitConfig.Authentication.AuthorizationType
+				}
+			}
+			if passwordSet {
+				authenticated = true
+			}
+			if existing.GitConfig.Authentication == nil && passwordSet && password == "" {
+				return fmt.Errorf("new Git authentication requires a non-empty password/token")
+			}
+			if !authenticated && credential.Username != "" && !passwordSet {
+				return fmt.Errorf("new Git authentication requires a password/token via --git-password-stdin or PORTAINERCTL_GIT_PASSWORD")
+			}
+
+			reference := existing.GitConfig.ReferenceName
+			if redeployBranch != "" {
+				reference = redeployBranch
+				if !strings.HasPrefix(reference, "refs/") {
+					reference = "refs/heads/" + reference
+				}
+			}
+			prune := existing.Option != nil && existing.Option.Prune
+			if cmd.Flags().Changed("prune") {
+				prune = redeployPrune
+			}
+			endpointID := redeployEnvID
+			if endpointID == 0 {
+				endpointID = existing.EndpointID
+			}
+			if endpointID == 0 {
+				return fmt.Errorf("--env is required because the stack has no associated environment ID")
+			}
+			path := fmt.Sprintf("/stacks/%s/git/redeploy?endpointId=%d", args[0], endpointID)
+			body := map[string]interface{}{
+				"RepositoryReferenceName":     reference,
+				"RepositoryAuthentication":    authenticated,
+				"RepositoryUsername":          credential.Username,
+				"RepositoryPassword":          password,
+				"RepositoryAuthorizationType": credential.AuthorizationType,
+				"Env":                         existing.Env,
+				"Prune":                       prune,
+				"RepullImageAndRedeploy":      redeployRepull,
+				"PullImage":                   redeployRepull,
+				"StackName":                   existing.Name,
 			}
 			var result interface{}
-			if err := c.Put(path, map[string]interface{}{}, &result); err != nil {
+			if err := c.Put(path, body, &result); err != nil {
 				return err
 			}
 			output.Success("Stack " + args[0] + " redeployed from Git.")
@@ -367,6 +521,10 @@ func stackCmd() *cobra.Command {
 		},
 	}
 	redeployCmd.Flags().IntVar(&redeployEnvID, "env", 0, "Environment ID (required for stacks created before v1.18.0)")
+	redeployCmd.Flags().StringVar(&redeployBranch, "branch", "", "Repository branch or full ref (default: preserve current ref)")
+	redeployCmd.Flags().BoolVar(&redeployPrune, "prune", false, "Prune services no longer referenced (default: preserve current setting)")
+	redeployCmd.Flags().BoolVar(&redeployRepull, "repull-image", false, "Re-pull images and force redeployment")
+	addGitAuthFlags(redeployCmd, &redeployGitAuth)
 
 	var startEnvID int
 	startCmd := &cobra.Command{
